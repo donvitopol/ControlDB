@@ -1,0 +1,4 @@
+pandas>=2.0
+pyodbc>=4.0
+SQLAlchemy>=2.0
+pretty_logger>=0.1

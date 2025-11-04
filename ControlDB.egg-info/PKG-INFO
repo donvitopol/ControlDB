@@ -1,0 +1,46 @@
+Metadata-Version: 2.1
+Name: ControlDB
+Version: 1.2.3
+Summary: ControlDB: Utilities for database management, processing sample replicates, and logging.
+Home-page: https://github.com/yourusername/ControlDB
+Author: Vito Pol
+Author-email: don_vito_pol@hotmail.com
+Classifier: Programming Language :: Python :: 3.11
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Database :: Front-Ends
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE.txt
+
+# ControlDB
+
+**ControlDB** is a lightweight Python package for managing local databases (such as MS Access `.mdb` / `.accdb`), 
+Excel files, and structured logging — ideal for lab automation, data management, and experiment tracking.
+
+---
+
+## 🚀 Features
+
+- 📁 **Automatic Database Management**  
+  Create, update, and connect to Access databases dynamically.
+
+- 📊 **Excel Data Integration**  
+  Read, write, and merge Excel files with flexible index and column handling.
+
+- 🧱 **ORM-Like Table Creation**  
+  Easily generate and manage database tables from Python classes or schemas.
+
+- 🧩 **Multi-Database Control**  
+  Manage multiple database instances at once via the `ControlDBManager`.
+
+- 🪶 **Structured Logging**  
+  Integrated with `pretty_logger` for clean, colorized console output.
+
+---
+
+## 🧰 Installation
+
+```bash
+pip install .

@@ -1,0 +1,199 @@
+
+import os, sys
+import pandas as pd
+from sqlalchemy import Engine
+from sqlalchemy import (
+    Column,
+    Integer,      # Whole numbers
+    SmallInteger, # Smaller integers
+    BigInteger,   # Large integers
+    Float,        # Floating point numbers
+    Numeric,      # Exact decimal numbers (e.g., money)
+    String,       # Varchar / short text
+    Text,         # Long text
+    Boolean,      # True/False
+    Date,         # Date only
+    DateTime,     # Date + time
+    Time,         # Time only
+    LargeBinary,  # Binary data / files
+)
+from pretty_logger import PrettyLogger, prettylog
+
+from controldb import ControlDB, construct_folder_path
+from controldb_manager import ControlDBManager
+
+from models.user.user       import USERBASE, InfoTable, BotTable, BrokerTable, PairTable, CoinTable, StrategyTable, Strategy1Table
+from models.user.broker     import BITVAVOBASE, PairTable, AssetsTable, FeesTable
+ 
+
+@prettylog
+class TestControlDB():
+    @property
+    def db(self)->ControlDB:          
+        return self.__db
+    
+    def __init__(self, *args, **kwargs)->None:
+        self.logLevel = kwargs.get("logLevel", 30)
+        self.logger:PrettyLogger
+        self.__db = ControlDB(*args, **kwargs)
+
+        print(self.__db.rootPath)
+        print(self.__db.filePath)
+        print(self.__db.name)
+
+    def setup_db(self, *args, **kwargs) -> str:
+        """
+        Flexible wrapper for ControlDB.setup using *args and **kwargs.
+        """
+        path = self.__db.setup(*args, **kwargs)
+        self.logger.info(f" -> Database authorized: {self.db.authorized}")
+        return path
+
+    def connect_db(self, *args, **kwargs) -> Engine:
+        """
+        Flexible wrapper for ControlDB.connect using *args and **kwargs.
+        """
+        return self.db.connect(*args, **kwargs)
+
+    def detach_db(self, *args, **kwargs) -> None:
+        """Flexible wrapper for ControlDB.detach."""
+        return self.db.detach(*args, **kwargs)
+    
+    def populate_table(self, table_or_class: object, **kwargs):
+        """
+        Populate a table with initial data dynamically.
+
+        Parameters:
+        - table_or_class (object): The ORM class or table object to populate.
+        - kwargs: Key-value pairs corresponding to column names and values.
+
+        Example usage:
+        - populate_table(InfoTable, fullname="John Doe", username="johndoe", email="john@example.com", password="secret")
+        - populate_table(CoinTable, free=100, active=100, tradeID=4)
+        """
+        # Handle special case defaults (optional)
+        if hasattr(table_or_class, "__tablename__") and table_or_class.__tablename__ == "InfoTable":
+            if "email" not in kwargs or kwargs["email"] is None:
+                kwargs["email"] = f"{kwargs.get('username', 'user')}@example.com"
+            if "password" not in kwargs:
+                kwargs["password"] = ""
+
+        # Create the row in the database
+        self.db.row_create(table_or_class, **kwargs)
+
+    def test_util_get(self, table, column:str, columns:list):
+        # Test model
+        row = self.db.get.row(table, 1)
+        print(row)
+        # print(row['free'])
+        print(self.db.get.get_first_free_id(table))
+        # print(self.db.get.column_as_list(table, column))
+        # print(self.db.get.column_values(table, columns))
+        print(self.db.get.column_names(table))
+        # print(self.db.get.table(table))
+    
+    def insert_data(self, *args, **kwargs) -> None:
+        """Flexible wrapper for ControlDB.data_insert."""
+
+        # Unpack arguments
+        table_class = args[0]
+        row_id = args[1]  # use a local variable instead of modifying args
+        data = args[2]
+
+        # Merge the data into the existing row
+        self.db.row_merge(table_class, row_id, data)
+        row_id += 1  # increment local variable
+
+        # Replace the data in the next row
+        self.db.row_replace(table_class, row_id, data)
+        row_id += 1
+
+        # Update the username in row with id=1
+        self.db.update_column_value(table_class, row_id, "username", "new_name1")
+
+        return
+    
+    def excel_create_file(self, table, file) -> None:
+        # self.db.excel.create_file(file, sheet_name="Test")
+        df = self.db.get.table(table)
+        # self.db.excel.upload_dataframe(file, df, sheet_name="Test")
+        df = self.db.excel.read_file(file, sheet_name="Test")
+        print(df)
+        pass
+
+    def remove(self) -> None:
+        # Remove database
+        self.db.remove(exec=True)
+        self.db.remove_folder(exec=True)
+
+    def cdbm(self, userName:str, password:str = ""):
+        # dbm = ControlDBManager(dbName="database2", logLevel=self.logLevel)
+        # print(dbm.rootPath)
+        # dbm.create(userName, password=password)
+
+        # dbm.login(userName, password=password)
+        # dbm.login("test2")
+        pass
+
+if __name__ == "__main__":
+    models = USERBASE
+    fullname="Vito Pol"
+    username="donvitopol"
+    password="test"
+    data = {
+        "username": "John Doe",
+        "fullname": "John Doe",
+        "email": "john@example.com"  # ✅ required column
+    }  
+
+    test = TestControlDB("Test", folderSystem=["MyDB2","database"], logLevel=10)
+    test.setup_db(password=password, base=models, login=False)
+    test.connect_db(password=password, base=models)
+    # exit()
+    
+    # Populate database with dynamic input
+    for x in range(10):
+        test.populate_table(InfoTable, fullname=fullname, username=username, password=password)
+    # test.detach_db()
+    # exit()
+     
+    print(test.insert_data(InfoTable, 5, data))
+    # test.detach_db()
+    # exit()
+    
+    test.test_util_get(InfoTable, "username", ["username","email"])
+    # test.detach_db()
+    # exit()
+
+    file= construct_folder_path("MyDB", "Excel_test", subFolder="Excel", db_type = "xlsx", levels_up=0)
+    # print(file)
+    test.excel_create_file(InfoTable, file)
+    # test.detach_db()
+    # exit()
+
+    # coinTable = test.db.create_table_from_existing("CoinTable")
+    # # Populate InfoTable
+    # for x in range(10):
+    #     test.populate_table(coinTable, free=100, active=100, tradeID=4)
+    # test.db.detach()
+    # exit()
+
+    test.remove()
+    test.detach_db()
+    exit()
+    test.cdbm(username, password=password)
+    test.detach_db()
+    exit()
+
+
+    test_model(InfoTable, "username", ["username","email"])
+    db.detach()
+    exit()
+
+    db.data_update(InfoTable, 2, {"free":2000, "symbol":"ADA"})
+    test_model(coinTable, "symbol", ["symbol","free"])
+
+    # print(db.model.import_table("CoinTable"))
+    exit()
+
+    pass

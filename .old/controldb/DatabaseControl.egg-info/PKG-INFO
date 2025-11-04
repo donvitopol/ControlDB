@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: DatabaseControl
+Version: 1.0
+Summary: DatabaseControl: Utilities for database management, processing sample replicates, and logging.
+Author: donvitopol
+Author-email: don_vito_pol@hotmail.com
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.13
+Requires-Dist: pandas>=2.0
+Requires-Dist: pyodbc>=4.0
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: pretty_logger>=0.1
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

@@ -1,7 +1,8 @@
 import unittest
 import os
 import tempfile
-from src import ControlDB, UtilManager, UtilGetManager, ROOTBASE, UserTable
+from  src.utils import UtilsTable, UtilsRow, require_authorization
+from src import ControlDB, ROOTBASE, UserTable
 from tests.utils import temp_controldb, close_db, create_dummy_dataframe, make_temp_excel, temp_excel_manager, safe_remove_folder
 from sqlalchemy import Engine, Table
 
@@ -185,99 +186,148 @@ class TestControlDB(unittest.TestCase):
         pass
 
     # -----------------------
-    # Test TestUtilManager
+    # Test TestUtils
     # -----------------------
-    def test_utilmanager_core_table_load_row_control(self):
-        table = self.db.load_row_existing_table("UserTable")
-        self.assertEqual(type(table), Table)
-        columnNames = self.db.get.column_names(table)
-        self.assertTrue(columnNames, ['ID', 'username', 'password', 'fullname', 'email'])
-        row =  {'username': "Vito", 'password':self.password, 'fullname':"Vito Pol", 'email':"test@test.org"}
+
+    def create_test(self, table:UtilsTable, data:dict):
+        print(f" -- merge_test")     
         
         # Create row
-        id  = self.db.row_create(table, **row)
-        self.assertEqual(1, id)
-        _row = self.db.get.row(table, id)
-        self.assertEqual("Vito", _row["username"])
+        ref_id = table.get_first_free_id()
+        id  = table.row.create(**data)
+        self.assertEqual(ref_id, id)
+        row = table.row.get()
+        
+        print(f"data:           {data}")
+        for key, value in data.items():
+            # print(f"key:    {key}")
+            # print(f"value:  {value}")
+            self.assertEqual(value, row[key])
 
+        # self.assertEqual(1, 2)
+        
+    def merge_test(self, table:UtilsTable, data:dict, id:int = None):
+        print(f" -- merge_test")     
+        
+        if id is not None:
+            table.row.id = id
 
-        result  = self.db.row_merge(table, id, {'username': "donvitopol"})
+        _row  = table.row.get().copy()
+
+        result  = table.row.merge(data)
         self.assertTrue(result)
-        _row = self.db.get.row(table, id)
-        self.assertEqual("donvitopol", _row["username"])
-        self.assertEqual(self.password, _row["password"])
+        row = table.row.get()
+        
+        print(f"data:           {data}")
+        for key, value in data.items():
+            # print(f"key:    {key}")
+            # print(f"value:  {value}")
+            self.assertEqual(value, row[key])
+        
+        print(f"_row:           {_row}")
+        print(f"row:            {row}")
+        extra_data = {k: v for k, v in _row.items() if k not in data}
+        print(f"extra_data:     {extra_data}")
+        # print(extra_data)
+        for key, value in extra_data.items():
+            self.assertEqual(value, row[key])
 
-        result  = self.db.row_replace(table, id, {'username': "test"})
+        # self.assertEqual(1, 2)
+
+    def replace_test(self, table:UtilsTable, data:dict, id:int = None):   
+        print(f" -- replace_test")     
+        if id is not None:
+            table.row.id = id
+
+        result  = table.row.replace(data)
+        # print(result)
         self.assertTrue(result)
+        row = table.row.get()
+
+        print(f"data:           {data}")
+        print(f"row:            {row}")
+        for key, value in data.items():
+            self.assertEqual(value, row[key])
+            
+        extra_data = {k: v for k, v in row.items() if k not in data}
+        print(f"extra_data:     {extra_data}")
+        for key, value in extra_data.items():
+            self.assertIsNone(row[key])
+
+        # self.assertEqual(1, 2)
+
+    
+    def table_manipulate_test(self, table_identity: any, ref_is_core:bool, ref_column_names:list):   
+        print(f" -- table_manipulate_test")   
+        
+        table = self.db.load_table(table_identity)
+        self.assertIsInstance(table, UtilsTable)
+        
+
+        self.assertEqual(table.is_core, ref_is_core) 
+        self.assertTrue(hasattr(table, "connect"))
+        self.assertTrue(hasattr(table, "table_class")) 
+        self.assertEqual(table.engine, self.db.engine)
+        self.assertEqual(table.session, self.db.session)
+        self.assertEqual(table.base, self.db.base) 
+
+    
+        columnNames = table.get_column_names()
+        self.assertTrue(columnNames, ref_column_names)
+        
+        data =  {
+            'username': "Vito", 
+            'password':self.password, 
+            'fullname':"Vito Pol", 
+            'email':"test@test.org"
+            }
+        self.create_test(table, data)
+        self.merge_test(table, {'username': "donvitopol", 'fullname':"Jan Klaas"})
+        self.replace_test(table, {'username': "test"})
 
 
-    def test_utilmanager_orm_table_row_create(self):
-        row =  {'username': "Vito", 'password':self.password, 'fullname':"Vito Pol", 'email':"test@test.org"}
-        id  = self.db.row_create(UserTable, **row)
-        self.assertEqual(1, id)
-        _row = self.db.get.row(UserTable, id)
-        self.assertEqual("Vito", _row["username"])
-        # self.assertTrue(False)
-        pass
 
-    def test_utilmanager_row_create(self):
-        pass
-    # -----------------------
-    # Test TestUtilGetManager
-    # -----------------------
-
-    def test_utilgetmanager(self):
-
-        pass
+        # self.assertEqual(1, 2)
+    
+    
+    
+    def test_utils_core_load_table(self):
+        print(f" -- test_utils_table_row_core_load_manipulate")     
+        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
+        self.table_manipulate_test("UserTable", True, ref_column_names)
 
 
 
+    def test_utils_org_load_table(self):
+        print(f" -- test_utils_table_row_core_load_manipulate")  
+        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
+        self.table_manipulate_test(UserTable, False, ref_column_names)
 
 
+        
+
+        # self.assertEqual(1, 2)
 
 
+    # def test_utilmanager_orm_table_row_create(self):
+    #     row =  {'username': "Vito", 'password':self.password, 'fullname':"Vito Pol", 'email':"test@test.org"}
+    #     id  = self.db.row_create(UserTable, **row)
+    #     self.assertEqual(1, id)
+    #     _row = self.db.get.row(UserTable, id)
+    #     self.assertEqual("Vito", _row["username"])
+    #     # self.assertTrue(False)
+    #     pass
 
+    # def test_utilmanager_row_create(self):
+    #     pass
+    # # -----------------------
+    # # Test TestUtilGetManager
+    # # -----------------------
 
+    # def test_utilgetmanager(self):
 
-    # def test_create_file_creates_file(self):
-    #     file_name = "new_db"
-    #     new_db = ControlDB(fileName=file_name, rootPath=self.temp_dir.name)
-    #     created = new_db.create_file(password="secret")
-    #     self.assertTrue(created)
-    #     self.assertTrue(os.path.exists(new_db.filePath))
-    #     new_db.detach()
+    #     pass
 
-    # def test_remove_folder_successful(self):
-    #     """Test that remove_folder deletes the folder after the database file is removed."""
-    #     # Stap 1: verwijder de databasefile
-    #     result_file = self.db.remove(exec=True, removeFolder=False)
-    #     self.assertTrue(result_file)
-    #     self.assertFalse(os.path.exists(self.db.filePath))
-
-    #     # Stap 2: verwijder de folder via helper
-    #     result_folder = safe_remove_folder(self.db)
-    #     self.assertTrue(result_folder)
-    #     self.assertFalse(os.path.exists(self.db.rootPath))
-
-    # def test_remove_folder_dryrun(self):
-    #     result = self.db.remove_folder(exec=False)
-    #     self.assertFalse(result)
-    #     self.assertTrue(os.path.exists(self.db.rootPath))
-
-    # def test_setup_creates_file_and_connects(self):
-    #     file_name = "setup_db"
-    #     new_db = ControlDB(fileName=file_name, rootPath=self.temp_dir.name)
-    #     result = new_db.setup(password="secret")
-    #     self.assertTrue(result)
-    #     self.assertTrue(new_db.authorized)
-    #     self.assertTrue(os.path.exists(new_db.filePath))
-    #     new_db.detach()
-
-    # def test_temp_excel_manager_integration(self):
-    #     manager, test_path, temp_dir = temp_excel_manager()
-    #     df_path = make_temp_excel(create_dummy_dataframe())
-    #     self.assertTrue(os.path.exists(df_path))
-    #     temp_dir.cleanup()
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ import urllib
 import pandas as pd
 import win32com.client
 
+from sqlalchemy import Engine, MetaData, Table, Column, Integer, String
+from sqlalchemy import insert, delete, select, text, update
 from sqlalchemy import Engine, create_engine, MetaData
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import ProgrammingError
@@ -54,7 +56,7 @@ from sqlalchemy import (
     LargeBinary,  # Binary data / files
 )
 from pretty_logger import PrettyLogger
-from .util_manager import UtilManager, UtilGetManager, require_authorization
+from .utils import UtilsTable, UtilsRow, require_authorization
 from .excel_manager import ExcelManager
 
 
@@ -162,7 +164,7 @@ def remove_folder(path: str, exec: bool = False) -> bool:
     return True
 
 
-class ControlDB(UtilManager):
+class ControlDB():
     """
     ControlDB class for managing MS Access databases and optional Excel integration.
 
@@ -178,6 +180,46 @@ class ControlDB(UtilManager):
         Excel handling class.
     """
 
+    def __init__(self, fileName: str, rootPath: str = None, folderSystem: str | list[str] = None,
+                 db_type: str = "mdb", logLevel: int = 30):
+        """
+        Initialize ControlDB instance.
+
+        Parameters
+        ----------
+        fileName : str
+            Database file name without extension.
+        rootPath : str, optional
+            Root directory (default=current working directory).
+        folderSystem : str or list, optional
+            Folder structure inside root.
+        db_type : str, optional
+            Database extension (mdb/accdb).
+        logLevel : int, optional
+            Logger level (default=30).
+        """
+        self.logLevel: PrettyLogger = logLevel
+        logCtr = PrettyLogger()
+        moduleName: str = "ControlDB"
+        self.logger: PrettyLogger = logCtr.get(moduleName)
+        logCtr.add_stream(moduleName, level=logLevel)
+
+        # super().__init__()
+
+        self.engine: Engine = None
+        self.session: Session = None
+        self.base: MetaData | list[MetaData] = None
+        self.__id: int = None
+        self.__authorized: bool = False
+        self.excel = ExcelManager(logLevel=self.logLevel)
+
+        self.__rootPath = rootPath if rootPath else os.getcwd()
+        self.__folderSystem:str = os.path.join(*folderSystem) if isinstance(folderSystem, list) else folderSystem
+        self.__fileName: str = fileName
+        self.__db_type: str = db_type
+
+        self.logger.debug(f'  - {moduleName} -> __init__')
+    
     @property
     def id(self) -> int:
         """Database ID."""
@@ -230,47 +272,6 @@ class ControlDB(UtilManager):
         """Return list of folders in a directory."""
         return [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
 
-    def __init__(self, fileName: str, rootPath: str = None, folderSystem: str | list[str] = None,
-                 db_type: str = "mdb", logLevel: int = 30):
-        """
-        Initialize ControlDB instance.
-
-        Parameters
-        ----------
-        fileName : str
-            Database file name without extension.
-        rootPath : str, optional
-            Root directory (default=current working directory).
-        folderSystem : str or list, optional
-            Folder structure inside root.
-        db_type : str, optional
-            Database extension (mdb/accdb).
-        logLevel : int, optional
-            Logger level (default=30).
-        """
-        self.logLevel: PrettyLogger = logLevel
-        logCtr = PrettyLogger()
-        moduleName: str = "ControlDB"
-        self.logger: PrettyLogger = logCtr.get(moduleName)
-        logCtr.add_stream(moduleName, level=logLevel)
-
-        super().__init__()
-
-        self.engine: Engine = None
-        self.session: Session = None
-        self.base: MetaData | list[MetaData] = None
-        self.__id: int = None
-        self.__authorized: bool = False
-        self.get: UtilGetManager
-        self.excel = ExcelManager(logLevel=self.logLevel)
-
-        self.__rootPath = rootPath if rootPath else os.getcwd()
-        self.__folderSystem:str = os.path.join(*folderSystem) if isinstance(folderSystem, list) else folderSystem
-        self.__fileName: str = fileName
-        self.__db_type: str = db_type
-
-        self.logger.debug(f'  - {moduleName} -> __init__')
-    
     def __set_mdb_password(self, filepath: str, password: str) -> None:
         """
         Set or change the password for an MS Access database using DAO COM.
@@ -297,7 +298,7 @@ class ControlDB(UtilManager):
         db.Close()
         self.logger.info("   -> Password set via COM")
 
-    def create_path(self) -> str:
+    def __create_path(self) -> str:
         """
         Ensure the folder path exists for the database, creating it if necessary.
 
@@ -308,7 +309,7 @@ class ControlDB(UtilManager):
 
         Example
         -------
-        >>> folder_path = db.create_path()
+        >>> folder_path = db.__create_path()
         >>> print(folder_path)
         """
         self.logger.info("   -> Create Folder Path")
@@ -348,7 +349,7 @@ class ControlDB(UtilManager):
         >>> print(created)
         """
         # Ensure folder exists
-        self.create_path()
+        self.__create_path()
 
         fileNameOnly = os.path.basename(self.filePath)
         self.logger.info(f"   -> Create File {fileNameOnly}")
@@ -486,7 +487,6 @@ class ControlDB(UtilManager):
         self.base = base if base else MetaData()
         _Session = sessionmaker(bind=self.engine)
         self.session = _Session()
-        super().connect()
 
         self.logger.info(f"   -> Connect to database: {self.name} => Connection established successfully.")
         self.logger.debug(f"     => File path of database: {self.filePath}")
@@ -512,7 +512,60 @@ class ControlDB(UtilManager):
             time.sleep(0.4)  # Let OS flush handles
         except Exception as e:
             self.logger.error(f"Error while fully closing database: {e}")
-    
+  
+    def remove_folder(self, exec: bool = False, retries: int = 5, delay: float = 0.5) -> bool:
+        """
+        Safely delete the database folder, but only if the database file is already removed.
+
+        Parameters
+        ----------
+        exec : bool
+            Whether to actually execute the deletion (default=False).
+        retries : int
+            Number of retry attempts for deletion.
+        delay : float
+            Delay between retries in seconds.
+
+        Returns
+        -------
+        bool
+            True if folder was successfully removed, False otherwise.
+        """
+        # Check if database file still exists
+        if os.path.exists(getattr(self, "filePath", "")):
+            self.logger.error(f"Cannot remove folder because database file still exists: {self.filePath}")
+            return False
+
+        if not exec:
+            self.logger.info(f"[DRYRUN] Would remove folder: {self.rootPath}")
+            return False
+
+        if not os.path.exists(self.rootPath):
+            self.logger.warning(f"⚠️ Folder does not exist: {self.rootPath}")
+            return False
+
+        def _handle_remove_readonly(func, path, _):
+            """Helper to change file permission and retry deletion."""
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception as e:
+                self.logger.warning(f"⚠️ Could not remove {path}: {e}")
+
+        for attempt in range(1, retries + 1):
+            try:
+                shutil.rmtree(self.rootPath, onerror=_handle_remove_readonly)
+                self.logger.info(f"✅ Folder successfully removed: {self.rootPath}")
+                return True
+            except PermissionError as e:
+                self.logger.warning(f"⛔ Permission denied (attempt {attempt}/{retries}): {e}")
+            except OSError as e:
+                self.logger.warning(f"⚠️ OS error during remove (attempt {attempt}/{retries}): {e}")
+            time.sleep(delay)
+
+        self.logger.error(f"❌ Could not remove folder after {retries} attempts: {self.rootPath}")
+        return False
+  
     @require_authorization
     def remove(self, exec: bool = False, removeFolder: bool = True, retries: int = 5, delay: float = 0.5) -> bool:
         """
@@ -574,55 +627,100 @@ class ControlDB(UtilManager):
             f"Close any applications using it (Access, DAO, etc.)"
         )
 
-    def remove_folder(self, exec: bool = False, retries: int = 5, delay: float = 0.5) -> bool:
+    @require_authorization
+    def create_table(self, table_name: str, columns: dict, metadata: MetaData = None) -> Table:
         """
-        Safely delete the database folder, but only if the database file is already removed.
+        Dynamically create a new SQLAlchemy table in the connected database.
 
-        Parameters
-        ----------
-        exec : bool
-            Whether to actually execute the deletion (default=False).
-        retries : int
-            Number of retry attempts for deletion.
-        delay : float
-            Delay between retries in seconds.
+        The function accepts different ID column name formats ('id', 'Id', 'ID'),
+        but the final database column will always be created as 'ID'
+        (auto-incrementing primary key).
 
-        Returns
-        -------
-        bool
-            True if folder was successfully removed, False otherwise.
+        Args:
+            table_name (str): Name of the table to create.
+            columns (dict): Mapping of column names to SQLAlchemy types.
+            metadata (MetaData, optional): SQLAlchemy MetaData object.
+
+        Returns:
+            Table: The created SQLAlchemy Table object.
         """
-        # Check if database file still exists
-        if os.path.exists(getattr(self, "filePath", "")):
-            self.logger.error(f"Cannot remove folder because database file still exists: {self.filePath}")
-            return False
+        if not self.engine:
+            raise RuntimeError("⛔ - No active engine connection")
 
-        if not exec:
-            self.logger.info(f"[DRYRUN] Would remove folder: {self.rootPath}")
-            return False
+        # Use existing metadata or create new
+        if metadata is None:
+            metadata = MetaData()
 
-        if not os.path.exists(self.rootPath):
-            self.logger.warning(f"⚠️ Folder does not exist: {self.rootPath}")
-            return False
+        # ✅ Normalize ID column key (accept 'id', 'Id', 'ID')
+        normalized_columns = {}
+        has_id = False
+        for name, col_type in columns.items():
+            if name.lower() == "id":
+                normalized_columns["ID"] = col_type
+                has_id = True
+            else:
+                normalized_columns[name] = col_type
 
-        def _handle_remove_readonly(func, path, _):
-            """Helper to change file permission and retry deletion."""
-            try:
-                os.chmod(path, stat.S_IWRITE)
-                func(path)
-            except Exception as e:
-                self.logger.warning(f"⚠️ Could not remove {path}: {e}")
+        # ✅ Ensure ID column exists if missing
+        if not has_id:
+            normalized_columns = {"ID": Integer} | normalized_columns
 
-        for attempt in range(1, retries + 1):
-            try:
-                shutil.rmtree(self.rootPath, onerror=_handle_remove_readonly)
-                self.logger.info(f"✅ Folder successfully removed: {self.rootPath}")
-                return True
-            except PermissionError as e:
-                self.logger.warning(f"⛔ Permission denied (attempt {attempt}/{retries}): {e}")
-            except OSError as e:
-                self.logger.warning(f"⚠️ OS error during remove (attempt {attempt}/{retries}): {e}")
-            time.sleep(delay)
+        # ✅ Build column objects
+        column_objs = []
+        for name, col_type in normalized_columns.items():
+            if name == "ID":
+                column_objs.append(Column("ID", Integer, primary_key=True, autoincrement=True))
+            else:
+                column_objs.append(Column(name, col_type))
 
-        self.logger.error(f"❌ Could not remove folder after {retries} attempts: {self.rootPath}")
-        return False
+        # ✅ Create and commit table
+        table = Table(table_name, metadata, *column_objs)
+        metadata.create_all(self.engine)
+
+        self.logger.info(f"✅ - Table '{table_name}' created successfully with standardized ID column")
+        return table
+
+    @require_authorization
+    def load_table(self, table_identity: any) -> UtilsTable:
+        """
+        Create a UtilsTable object from an existing database table.
+
+        Args:
+            table_identity (str | object): Existing table name (str) or ORM Table/Class (object).
+        Returns:
+            UtilsTable: Wrapped UtilsTable instance for the existing table.
+        """
+        def create_core_table() -> Table:
+            meta = MetaData()  # altijd nieuw MetaData object
+            with self.engine.connect() as conn:
+                stmt = text(f"SELECT * FROM [{table_identity}] WHERE 1=0")
+                result = conn.execute(stmt)
+                column_names = result.keys()
+            columns = [
+                Column(name, Integer, primary_key=True, autoincrement=True) if name.lower() == "id" else Column(name, String)
+                for name in column_names
+            ]
+            return Table(table_identity, meta, *columns)
+        
+        if isinstance(table_identity, str):
+            core_table = create_core_table()
+            uTable = UtilsTable(core_table, engine=self.engine, session=self.session, base=self.base, logLevel=self.logLevel)
+        else:
+            # ORM class of Table object
+            uTable = UtilsTable(table_identity, engine=self.engine, session=self.session, base=self.base, logLevel=self.logLevel)
+
+        self.logger.debug(f" => Table '{table_identity}' mapped from existing database")
+        return uTable
+    
+    @require_authorization
+    def get_table_names(self) -> list[str]:
+        """Return a list of non-system table names."""
+        try:
+            with self.engine.connect() as conn:
+                cursor = conn.connection.cursor()
+                names = [n.table_name for n in cursor.tables() if "MSys" not in n.table_name]
+                return names
+        except Exception as e:
+            self.logger.warning(f"⚠️ - Could not fetch table names: {e}")
+            return []
+        

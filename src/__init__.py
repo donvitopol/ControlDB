@@ -11,8 +11,7 @@ Exposes:
 """
 # print(" - __Init__: ControlDB ")
 from .excel_manager import ExcelManager
-from .util_manager import UtilManager, UtilGetManager, require_authorization
-from .utils_row import UtilsRow
+from .utils import UtilsTable, UtilsRow, require_authorization
 
 from .controldb import ControlDB, construct_folder_path
 from .controldb_manager import ControlDBManager
@@ -24,4 +23,7 @@ __all__ = [
     "ControlDBManager",
     "ExcelManager",
     "construct_folder_path",
+    "UtilsTable",
+    "UtilsRow",
+    "require_authorization",
 ]

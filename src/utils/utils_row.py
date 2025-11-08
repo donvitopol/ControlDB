@@ -1,17 +1,35 @@
 # UtilsRow.py
 
-from sqlalchemy import insert, select, delete, text, Table, Column, Integer, MetaData
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+import pandas as pd
 from typing import Optional, Dict, Any
 
-from pretty_logger import prettylog, PrettyLogger
-from src import require_authorization
+from sqlalchemy import Engine, MetaData, Table, Column, Integer, String
+from sqlalchemy import insert, select, delete, text, update, Table, Column, Integer, MetaData
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 
+from pretty_logger import prettylog, PrettyLogger
+
+from .decorators import require_authorization
 
 @prettylog
 class UtilsRow:
     """CRUD helper class for managing rows in ORM classes and Core Tables."""
+
+    @property
+    def authorized(self) -> bool:
+        """Check if the manager is authorized."""
+        return getattr(self, "_authorized", True)
+
+    @property
+    def id(self) -> int:
+        """ID."""
+        return self.__id
+
+    @id.setter
+    def id(self, value: int) -> None:
+        """Set ID."""
+        self.__id = value
 
     def __init__(self, table_class: object, row_id: Optional[int] = None, logLevel: int = 30):
         """
@@ -33,13 +51,6 @@ class UtilsRow:
 
         # Detect whether table_class is Core Table or ORM
         self.is_core = hasattr(self.table_class, "c")
-        self.logger.debug(f"UtilsRow initialized with {'Core Table' if self.is_core else 'ORM class'}")
-
-    @property
-    def authorized(self) -> bool:
-        """Check if the manager is authorized."""
-        return getattr(self, "_authorized", True)
-
     def connect(self, engine: Engine, session: Session, base: MetaData | list[MetaData]):
         """
         Connect the manager to a database engine and session.
@@ -52,6 +63,10 @@ class UtilsRow:
         self.engine = engine
         self.session = session
         self.base = base
+        
+        # Detect whether table_class is Core Table or ORM
+        self.logger.debug(f"UtilsRow initialized with {'Core Table' if self.is_core else 'ORM class'}")
+
         self.logger.debug(" -> UtilsRow connected")
 
     def _get_id_column(self) -> object:
@@ -82,19 +97,19 @@ class UtilsRow:
         return id_column
 
     @require_authorization
-    def get(self, row_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get(self, id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
-        Fetch a single row by row_id (optional) from stored table_class.
-        If row_id is provided, update self.row_id automatically.
+        Fetch a single row by id (optional) from stored table_class.
+        If id is provided, update self.row_id automatically.
 
         Args:
-            row_id (Optional[int]): Optional ID of the row to fetch.
+            id (Optional[int]): Optional ID of the row to fetch.
 
         Returns:
             Optional[Dict[str, Any]]: Row data as dict, or None if not found.
         """
-        if row_id is not None:
-            self.row_id = row_id
+        if id is not None:
+            self.row_id = id
 
         if self.row_id is None:
             self.logger.warning("⚠️ - No row_id provided for get")
@@ -108,7 +123,7 @@ class UtilsRow:
 
         if not result:
             return None
-        if hasattr(result, "_mapping"):  # Core Table Row
+        if self.is_core:  # Core Table Row
             return dict(result._mapping)
         if hasattr(result, "__table__"):  # ORM instance
             return {col.name: getattr(result, col.name) for col in result.__table__.columns}

@@ -81,9 +81,7 @@ class UtilsTable:
         self,
         table_class: object,
         engine: Engine,
-        session: Session,
-        base: MetaData | list[MetaData],
-    ):
+        session: Session=None):
         """
         Connect the manager (and UtilsRow) to a specific SQLAlchemy table, engine, and session.
 
@@ -97,16 +95,108 @@ class UtilsTable:
         self.table_class = table_class
         self.engine = engine
         self.session = session
-        self.base = base
 
         # Detect Core vs ORM
         self.is_core, kind, name = self._detect_kind_and_name(self.table_class)
 
         # Reconnect UtilsRow
-        self.__row.connect(engine, session, base)
+        self.__row.connect(table_class, engine, session)
 
         self._authorized = True
         self.logger.debug(f"✅ UtilsTable connected for {kind}: {name}")
+    
+    def create(self, 
+               table_name: str, 
+               columns: dict, 
+               engine: Engine,
+               session: Session=None,
+               metadata: MetaData = None
+        ) -> Table:
+        """
+        Dynamically create a new SQLAlchemy table in the connected database.
+
+        The function accepts different ID column name formats ('id', 'Id', 'ID'),
+        but the final database column will always be created as 'ID'
+        (auto-incrementing primary key).
+
+        Args:
+            table_name (str): Name of the table to create.
+            columns (dict): Mapping of column names to SQLAlchemy types.
+            metadata (MetaData, optional): SQLAlchemy MetaData object.
+
+        Returns:
+            Table: The created SQLAlchemy Table object.
+        """
+        if not engine:
+            raise RuntimeError("⛔ - No active engine connection")
+
+        # ✅ Normalize ID column key (accept 'id', 'Id', 'ID')
+        normalized_columns = {}
+        has_id = False
+        for name, col_type in columns.items():
+            if name.lower() == "id":
+                normalized_columns["ID"] = col_type
+                has_id = True
+            else:
+                normalized_columns[name] = col_type
+
+        # ✅ Ensure ID column exists if missing
+        if not has_id:
+            normalized_columns = {"ID": Integer} | normalized_columns
+
+        # ✅ Build column objects
+        column_objs = []
+        for name, col_type in normalized_columns.items():
+            if name == "ID":
+                column_objs.append(Column("ID", Integer, primary_key=True, autoincrement=True))
+            else:
+                column_objs.append(Column(name, col_type))
+
+        # Use existing metadata or create new
+        if metadata is None:
+            metadata = MetaData()
+
+        # ✅ Create and commit table
+        table = Table(table_name, metadata, *column_objs)
+        metadata.create_all(engine)
+        self.connect(table, engine, session=session)
+        self.logger.info(f"✅ - Table '{table_name}' created successfully with standardized ID column")
+        return table
+    
+    def load(self,
+        table_identity: any,
+        engine: Engine,
+        session: Session=None)->bool:
+        """
+        Create a UtilsTable object from an existing database table.
+
+        Args:
+            table_identity (str | object): Existing table name (str) or ORM Table/Class (object).
+        Returns:
+            UtilsTable: Wrapped UtilsTable instance for the existing table.
+        """
+        def create_core_table() -> Table:
+            meta = MetaData()  # altijd nieuw MetaData object
+            with engine.connect() as conn:
+                stmt = text(f"SELECT * FROM [{table_identity}] WHERE 1=0")
+                result = conn.execute(stmt)
+                column_names = result.keys()
+            columns = [
+                Column(name, Integer, primary_key=True, autoincrement=True) if name.lower() == "id" else Column(name, String)
+                for name in column_names
+            ]
+            return Table(table_identity, meta, *columns)
+        
+        # ORM class of Table object
+        if isinstance(table_identity, str):
+            table_class = create_core_table()
+        else:
+            # ORM class
+            table_class = table_identity
+
+        self.connect(table_class, engine, session=session)
+        self.logger.debug(f" => Table '{table_identity}' mapped from existing database")
+        return True
     
     # ---------------------- 🔹 COLUMN INFO ----------------------
 

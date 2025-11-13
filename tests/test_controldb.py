@@ -4,7 +4,7 @@ import tempfile
 from  src.utils import UtilsTable, UtilsRow, require_authorization
 from src import ControlDB, ROOTBASE, UserTable
 from tests.utils import temp_controldb, close_db, create_dummy_dataframe, make_temp_excel, temp_excel_manager, safe_remove_folder
-from sqlalchemy import Engine, Table
+from sqlalchemy import Engine, Table, String, Integer
 
 class TestControlDB(unittest.TestCase):
     """Unit tests for ControlDB using a real temporary database."""
@@ -186,24 +186,42 @@ class TestControlDB(unittest.TestCase):
         pass
 
     # -----------------------
-    # Test TestUtils
+    # Test Utils UtilsTable and UtilsRow
     # -----------------------
 
     def create_test(self, table:UtilsTable, data:dict):
-        print(f" -- merge_test")     
-        
-        # Create row
-        ref_id = table.get_first_free_id()
-        id  = table.row.create(**data)
-        self.assertEqual(ref_id, id)
-        row = table.row.get()
-        
-        print(f"data:           {data}")
-        for key, value in data.items():
-            # print(f"key:    {key}")
-            # print(f"value:  {value}")
-            self.assertEqual(value, row[key])
+        print(" -- create_test")
 
+        # --- 1. Get the first free ID and create the row ------------------------
+        ref_id = table.get_first_free_id()
+        new_id = table.row.create(**data)
+        self.assertEqual(
+            ref_id, new_id,
+            f"❌ create() returned ID {new_id}, expected first free ID {ref_id}"
+        )
+        
+        # --- 2. Fetch the row --------------------------------------------------
+        row = table.row.get()
+        self.assertIsNotNone(row, f"❌ get() returned None after create() for ID={new_id}")
+        
+        # --- 3. Validate all provided fields ----------------------------------
+        for key, value in data.items():
+            self.assertIn(key, row, f"❌ Column '{key}' missing in row after create()")
+            self.assertEqual(
+                value, row[key],
+                f"❌ Column '{key}' value mismatch after create(): expected {value}, got {row[key]}"
+            )
+
+        # --- 4. Validate extra columns are None --------------------------------       
+        data_with_id = {**data, "ID": new_id}
+        extra_columns = {k: v for k, v in row.items() if k not in data_with_id}
+        for col, val in extra_columns.items():
+            self.assertIsNone(
+                val,
+                f"❌ Column '{col}' should be None after create(), but got {val}"
+            )
+
+        print("    ✅ create_test passed")
         # self.assertEqual(1, 2)
         
     def merge_test(self, table:UtilsTable, data:dict, id:int = None):
@@ -233,43 +251,97 @@ class TestControlDB(unittest.TestCase):
             self.assertEqual(value, row[key])
 
         # self.assertEqual(1, 2)
+    
+    def replace_test(self, table: UtilsTable, data: dict, id: int = None):
+        print(" -- replace_test")
 
-    def replace_test(self, table:UtilsTable, data:dict, id:int = None):   
-        print(f" -- replace_test")     
+        # Ensure we start on the correct row
         if id is not None:
             table.row.id = id
 
-        result  = table.row.replace(data)
-        # print(result)
-        self.assertTrue(result)
-        row = table.row.get()
+        # Execute replace() and ensure it returns True
+        result = table.row.replace(data)
+        self.assertTrue(result, f"❌ replace() returned False for ID={id or table.row.id}")
 
-        print(f"data:           {data}")
+        # Fetch the updated row
+        row = table.row.get()
+        self.assertIsNotNone(row, f"❌ get() returned None after replace() on ID={id}")
+
+        # Ensure ID is preserved
+        expected_id = row["ID"]
+        data_with_id = {**data, "ID": expected_id}
+
+        print(f"data_with_id:   {data_with_id}")
         print(f"row:            {row}")
-        for key, value in data.items():
-            self.assertEqual(value, row[key])
-            
-        extra_data = {k: v for k, v in row.items() if k not in data}
-        print(f"extra_data:     {extra_data}")
-        for key, value in extra_data.items():
-            self.assertIsNone(row[key])
+
+        # Check that all provided fields match
+        for key, value in data_with_id.items():
+            self.assertIn(key, row, f"❌ Column '{key}' missing in row after replace()")
+            self.assertEqual(
+                value, row[key],
+                f"❌ Column '{key}' value mismatch after replace(): expected {value}, got {row[key]}"
+            )
+
+        # Check all other columns were set to None
+        extra_columns = {k: v for k, v in row.items() if k not in data_with_id}
+
+        print(f"extra_columns:  {extra_columns}")
+
+        for col, val in extra_columns.items():
+            self.assertIsNone(
+                val,
+                f"❌ Column '{col}' should be None after replace(), but got {val}"
+            )
 
         # self.assertEqual(1, 2)
-
     
-    def table_manipulate_test(self, table_identity: any, ref_is_core:bool, ref_column_names:list):   
+    def delete_test(self, table: UtilsTable, id: int = None):
+        print(" -- delete_test")
+
+        # If an ID is provided, set it
+        if id is not None:
+            table.row.id = id
+
+        # --- 1. VERIFY ROW EXISTS BEFORE DELETE ---------------------------------
+        before_row = table.row.get()
+        self.assertIsNotNone(
+            before_row,
+            f"❌ delete_test: Row with ID={table.row.id} does NOT exist before deletion!"
+        )
+
+        # --- 2. PERFORM DELETE ---------------------------------------------------
+        result = table.row.delete()
+        self.assertTrue(
+            result,
+            f"❌ delete_test: delete() returned False for ID={table.row.id}"
+        )
+
+        # --- 3. VERIFY ROW IS NOW GONE ------------------------------------------
+        after_row = table.row.get()
+        self.assertIsNone(
+            after_row,
+            f"❌ delete_test: Row with ID={table.row.id} STILL EXISTS after deletion!"
+        )
+
+        # --- 4. OPTIONAL: CHECK THAT DELETING AGAIN RETURNS FALSE ----------------
+        second_try = table.row.delete()
+        self.assertFalse(
+            second_try,
+            "❌ delete_test: delete() should return False when deleting a non-existing row!"
+        )
+
+        print("    ✅ delete_test passed")
+
+    def table_manipulate_test(self, table: UtilsTable, ref_is_core:bool, ref_column_names:list):   
         print(f" -- table_manipulate_test")   
         
-        table = self.db.load_table(table_identity)
-        self.assertIsInstance(table, UtilsTable)
-        
+        self.assertIsInstance(table, UtilsTable)        
 
         self.assertEqual(table.is_core, ref_is_core) 
         self.assertTrue(hasattr(table, "connect"))
         self.assertTrue(hasattr(table, "table_class")) 
         self.assertEqual(table.engine, self.db.engine)
         self.assertEqual(table.session, self.db.session)
-        self.assertEqual(table.base, self.db.base) 
 
     
         columnNames = table.get_column_names()
@@ -284,49 +356,40 @@ class TestControlDB(unittest.TestCase):
         self.create_test(table, data)
         self.merge_test(table, {'username': "donvitopol", 'fullname':"Jan Klaas"})
         self.replace_test(table, {'username': "test"})
+        # self.delete_test(table)
 
-
+        # print(table.get_column_definitions())
 
         # self.assertEqual(1, 2)
     
-    
-    
+
+
+    def test_utils_core_create_table(self):
+        print(f" -- test_utils_table_row_core_load_manipulate")     
+
+        column_def = {
+            'ID': Integer, 
+            'username': String, 
+            'password': String, 
+            'fullname': String,     
+            'email': String
+            }
+        table = self.db.create_table("Test", column_def)
+
+        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
+        self.table_manipulate_test(table, True, ref_column_names)
+
     def test_utils_core_load_table(self):
         print(f" -- test_utils_table_row_core_load_manipulate")     
         ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
-        self.table_manipulate_test("UserTable", True, ref_column_names)
-
-
+        table = self.db.load_table("UserTable")
+        self.table_manipulate_test(table, True, ref_column_names)
 
     def test_utils_org_load_table(self):
         print(f" -- test_utils_table_row_core_load_manipulate")  
         ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
-        self.table_manipulate_test(UserTable, False, ref_column_names)
-
-
-        
-
-        # self.assertEqual(1, 2)
-
-
-    # def test_utilmanager_orm_table_row_create(self):
-    #     row =  {'username': "Vito", 'password':self.password, 'fullname':"Vito Pol", 'email':"test@test.org"}
-    #     id  = self.db.row_create(UserTable, **row)
-    #     self.assertEqual(1, id)
-    #     _row = self.db.get.row(UserTable, id)
-    #     self.assertEqual("Vito", _row["username"])
-    #     # self.assertTrue(False)
-    #     pass
-
-    # def test_utilmanager_row_create(self):
-    #     pass
-    # # -----------------------
-    # # Test TestUtilGetManager
-    # # -----------------------
-
-    # def test_utilgetmanager(self):
-
-    #     pass
+        table = self.db.load_table(UserTable)
+        self.table_manipulate_test(table, False, ref_column_names)
 
 
 

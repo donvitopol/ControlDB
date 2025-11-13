@@ -4,8 +4,7 @@ import pandas as pd
 from typing import Optional, Dict, Any
 
 from sqlalchemy import Engine, MetaData, Table, Column, Integer, String
-from sqlalchemy import insert, select, delete, text, update, Table, Column, Integer, MetaData
-from sqlalchemy.engine import Engine
+from sqlalchemy import insert, select, delete, text, update, inspect
 from sqlalchemy.orm import Session
 
 from pretty_logger import prettylog, PrettyLogger
@@ -45,28 +44,41 @@ class UtilsRow:
         self.session: Optional[Session] = None
         self.base: Optional[MetaData | list[MetaData]] = None
         self.table_class = table_class
-        self.row_id = row_id
+        self.id = row_id
         self.logLevel = logLevel
         self._authorized = True
 
         # Detect whether table_class is Core Table or ORM
         self.is_core = hasattr(self.table_class, "c")
-    def connect(self, engine: Engine, session: Session, base: MetaData | list[MetaData]):
+
+    def connect(self, table_class: object, engine: Engine, session: Session = None):
         """
-        Connect the manager to a database engine and session.
+        Connect the UtilsRow manager to a specific SQLAlchemy table or ORM class.
 
         Args:
-            engine (Engine): SQLAlchemy engine.
-            session (Session): SQLAlchemy session.
-            base (MetaData | list[MetaData]): SQLAlchemy MetaData object(s).
+            table_class (object): SQLAlchemy Table (Core) or ORM class.
+            engine (Engine): Active SQLAlchemy Engine instance.
+            session (Session, optional): SQLAlchemy ORM Session (only required for ORM use).
+
+        Raises:
+            RuntimeError: If no valid engine is provided.
         """
+        if engine is None:
+            raise RuntimeError("⛔ - No active engine connection provided")
+
+        self.table_class = table_class
         self.engine = engine
         self.session = session
-        self.base = base
-        
-        # Detect whether table_class is Core Table or ORM
-        self.logger.debug(f"UtilsRow initialized with {'Core Table' if self.is_core else 'ORM class'}")
 
+        # Detect Core table vs ORM class
+        if hasattr(table_class, "columns"):
+            self.is_core = True
+            kind = "Core Table"
+        else:
+            self.is_core = False
+            kind = "ORM Class"
+
+        self.logger.debug(f"UtilsRow initialized with {kind}")
         self.logger.debug(" -> UtilsRow connected")
 
     def _get_id_column(self) -> object:
@@ -100,7 +112,7 @@ class UtilsRow:
     def get(self, id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Fetch a single row by id (optional) from stored table_class.
-        If id is provided, update self.row_id automatically.
+        If id is provided, update self.id automatically.
 
         Args:
             id (Optional[int]): Optional ID of the row to fetch.
@@ -109,17 +121,17 @@ class UtilsRow:
             Optional[Dict[str, Any]]: Row data as dict, or None if not found.
         """
         if id is not None:
-            self.row_id = id
+            self.id = id
 
-        if self.row_id is None:
+        if self.id is None:
             self.logger.warning("⚠️ - No row_id provided for get")
             return None
 
         id_column = self._get_id_column()
         if self.is_core:
-            result = self.session.execute(select(self.table_class).where(id_column == self.row_id)).first()
+            result = self.session.execute(select(self.table_class).where(id_column == self.id)).first()
         else:
-            result = self.session.query(self.table_class).filter(id_column == self.row_id).first()
+            result = self.session.query(self.table_class).filter(id_column == self.id).first()
 
         if not result:
             return None
@@ -140,7 +152,7 @@ class UtilsRow:
         """
         if row_id is None:
             raise ValueError("⛔ - row_id cannot be None")
-        self.row_id = row_id
+        self.id = row_id
         self.logger.debug(f"🟢 - row_id set to {row_id}")
 
     @require_authorization
@@ -162,8 +174,8 @@ class UtilsRow:
                 row = self.table_class(*args, **kwargs)
                 self.session.add(row)
                 self.session.commit()
-                self.row_id = getattr(row, "ID", getattr(row, "id", getattr(row, "Id", None)))
-                return self.row_id
+                self.id = getattr(row, "ID", getattr(row, "id", getattr(row, "Id", None)))
+                return self.id
             else:
                 stmt = insert(self.table_class).values(**kwargs)
                 inserted_id = None
@@ -181,9 +193,9 @@ class UtilsRow:
                         else:
                             conn.execute(stmt)
 
-                self.row_id = inserted_id
+                self.id = inserted_id
                 self.logger.info(f"✅ Core row added to '{self.table_class.name}' with ID={inserted_id}")
-                return inserted_id
+                return self.id
 
         except Exception as e:
             self.session.rollback()
@@ -202,7 +214,7 @@ class UtilsRow:
         Returns:
             bool: True if row updated or inserted successfully.
         """
-        if self.row_id is None:
+        if self.id is None:
             self.logger.debug("ℹ️ - row_id not set, creating new row first")
             new_id = self.create(**data)
             return new_id is not None
@@ -210,39 +222,42 @@ class UtilsRow:
         try:
             id_column = self._get_id_column()
             if self.is_core:
-                sel = select(self.table_class).where(id_column == self.row_id)
+                sel = select(self.table_class).where(id_column == self.id)
                 existing = self.session.execute(sel).fetchone()
                 if existing:
-                    stmt = self.table_class.update().where(id_column == self.row_id).values(**data)
+                    stmt = self.table_class.update().where(id_column == self.id).values(**data)
                     self.session.execute(stmt)
-                    self.logger.info(f"✅ - Row ID={self.row_id} updated successfully")
+                    self.logger.info(f"✅ - Row ID={self.id} updated successfully")
                 else:
-                    new_data = {"ID": self.row_id, **data}
+                    new_data = {"ID": self.id, **data}
                     self.session.execute(insert(self.table_class).values(**new_data))
-                    self.logger.info(f"✅ - Row ID={self.row_id} inserted successfully")
+                    self.logger.info(f"✅ - Row ID={self.id} inserted successfully")
             else:
-                row = self.session.query(self.table_class).filter(id_column == self.row_id).first()
+                row = self.session.query(self.table_class).filter(id_column == self.id).first()
                 if row:
                     for k, v in data.items():
                         if hasattr(row, k):
                             setattr(row, k, v)
-                    self.logger.info(f"✅ - ORM Row ID={self.row_id} updated successfully")
+                    self.logger.info(f"✅ - ORM Row ID={self.id} updated successfully")
                 else:
-                    new_data = {"ID": self.row_id, **data}
+                    new_data = {"ID": self.id, **data}
                     self.session.add(self.table_class(**new_data))
-                    self.logger.info(f"✅ - ORM Row ID={self.row_id} inserted successfully")
+                    self.logger.info(f"✅ - ORM Row ID={self.id} inserted successfully")
             self.session.commit()
             return True
         except Exception as e:
             self.session.rollback()
             self.logger.error(f"❌ row_merge failed: {e}")
             return False
-
+    
     @require_authorization
     def replace(self, new_data: Dict[str, Any]) -> bool:
         """
-        Fully replace a row (overwrite existing content) for Core Table or ORM class.
-        If row_id is not set, a new row will be created first.
+        Fully replace a row for Core or ORM tables.
+        For ORM tables: all existing fields are set to None except the ID column
+        and keys provided in new_data.
+
+        If row_id is not set, a new row will be created.
 
         Args:
             new_data (Dict[str, Any]): New values to write to the row.
@@ -250,39 +265,80 @@ class UtilsRow:
         Returns:
             bool: True if successful, False otherwise.
         """
-        if self.row_id is None:
-            self.logger.debug("ℹ️ - row_id not set, creating new row first")
+        if self.id is None:
+            self.logger.debug("ℹ️ row_id not set, creating new row first")
             new_id = self.create(**new_data)
             return new_id is not None
 
         try:
             id_column = self._get_id_column()
+
+            # -------------------------
+            # CORE TABLE BEHAVIOR
+            # -------------------------
             if self.is_core:
-                sel = select(self.table_class).where(id_column == self.row_id)
-                existing = self.session.execute(sel).fetchone()
+                existing = (
+                    self.session.execute(
+                        select(self.table_class).where(id_column == self.id)
+                    ).fetchone()
+                )
+
+                # Delete → Re-insert
                 if existing:
-                    self.session.execute(delete(self.table_class).where(id_column == self.row_id))
-                if "ID" not in new_data and "id" not in new_data and "Id" not in new_data:
-                    new_data["ID"] = self.row_id
+                    self.session.execute(
+                        delete(self.table_class).where(id_column == self.id)
+                    )
+
+                # Ensure ID is kept
+                if not any(k.lower() == "id" for k in new_data.keys()):
+                    new_data["ID"] = self.id
+
                 self.session.execute(insert(self.table_class).values(**new_data))
+
+            # -------------------------
+            # ORM TABLE BEHAVIOR
+            # -------------------------
             else:
-                row = self.session.query(self.table_class).filter(id_column == self.row_id).first()
+                row = (
+                    self.session.query(self.table_class)
+                    .filter(id_column == self.id)
+                    .first()
+                )
+
                 if row:
+                    # 1. Get all mapped columns
+                    mapper = inspect(self.table_class)
+                    all_columns = [col.key for col in mapper.attrs]
+
+                    # 2. Set all fields to None except ID and incoming values
+                    for col in all_columns:
+                        if col.lower() == "id":
+                            continue
+                        if col in new_data:
+                            continue
+                        if hasattr(row, col):
+                            setattr(row, col, None)
+
+                    # 3. Apply new values
                     for k, v in new_data.items():
                         if hasattr(row, k):
                             setattr(row, k, v)
+
                 else:
-                    new_data["ID"] = self.row_id
-                    self.session.add(self.table_class(**new_data))
+                    # If row does not exist → create one using row_id
+                    new_data["ID"] = self.id
+                    row = self.table_class(**new_data)
+                    self.session.add(row)
 
             self.session.commit()
-            self.logger.info(f"✅ Row ID={self.row_id} replaced successfully")
+            self.logger.info(f"✅ Row ID={self.id} replaced successfully")
             return True
+
         except Exception as e:
             self.session.rollback()
             self.logger.error(f"❌ row_replace failed: {type(e).__name__}: {e}")
             return False
-
+    
     @require_authorization
     def delete(self) -> bool:
         """
@@ -291,21 +347,21 @@ class UtilsRow:
         Returns:
             bool: True if deleted successfully, False otherwise.
         """
-        if self.row_id is None:
+        if self.id is None:
             self.logger.warning("⚠️ - No row_id provided for delete")
             return False
 
         try:
             id_column = self._get_id_column()
             if self.is_core:
-                self.session.execute(delete(self.table_class).where(id_column == self.row_id))
+                self.session.execute(delete(self.table_class).where(id_column == self.id))
             else:
-                row = self.session.query(self.table_class).filter(id_column == self.row_id).first()
+                row = self.session.query(self.table_class).filter(id_column == self.id).first()
                 if row:
                     self.session.delete(row)
             self.session.commit()
-            self.logger.info(f"✅ Row ID={self.row_id} deleted successfully")
-            self.row_id = None
+            self.logger.info(f"✅ Row ID={self.id} deleted successfully")
+            self.id = None
             return True
         except Exception as e:
             self.session.rollback()

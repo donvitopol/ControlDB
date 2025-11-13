@@ -628,7 +628,7 @@ class ControlDB():
         )
 
     @require_authorization
-    def create_table(self, table_name: str, columns: dict, metadata: MetaData = None) -> Table:
+    def create_table(self, table_name: str, column_def: dict, metadata: MetaData = None) -> UtilsTable:
         """
         Dynamically create a new SQLAlchemy table in the connected database.
 
@@ -638,44 +638,14 @@ class ControlDB():
 
         Args:
             table_name (str): Name of the table to create.
-            columns (dict): Mapping of column names to SQLAlchemy types.
+            column_def (dict): Mapping of column names to SQLAlchemy types.
             metadata (MetaData, optional): SQLAlchemy MetaData object.
 
         Returns:
             Table: The created SQLAlchemy Table object.
         """
-        if not self.engine:
-            raise RuntimeError("⛔ - No active engine connection")
-
-        # Use existing metadata or create new
-        if metadata is None:
-            metadata = MetaData()
-
-        # ✅ Normalize ID column key (accept 'id', 'Id', 'ID')
-        normalized_columns = {}
-        has_id = False
-        for name, col_type in columns.items():
-            if name.lower() == "id":
-                normalized_columns["ID"] = col_type
-                has_id = True
-            else:
-                normalized_columns[name] = col_type
-
-        # ✅ Ensure ID column exists if missing
-        if not has_id:
-            normalized_columns = {"ID": Integer} | normalized_columns
-
-        # ✅ Build column objects
-        column_objs = []
-        for name, col_type in normalized_columns.items():
-            if name == "ID":
-                column_objs.append(Column("ID", Integer, primary_key=True, autoincrement=True))
-            else:
-                column_objs.append(Column(name, col_type))
-
-        # ✅ Create and commit table
-        table = Table(table_name, metadata, *column_objs)
-        metadata.create_all(self.engine)
+        table = UtilsTable(logLevel=self.logLevel)
+        table.create(table_name, column_def, self.engine, session=self.session, metadata = metadata)
 
         self.logger.info(f"✅ - Table '{table_name}' created successfully with standardized ID column")
         return table
@@ -690,27 +660,11 @@ class ControlDB():
         Returns:
             UtilsTable: Wrapped UtilsTable instance for the existing table.
         """
-        def create_core_table() -> Table:
-            meta = MetaData()  # altijd nieuw MetaData object
-            with self.engine.connect() as conn:
-                stmt = text(f"SELECT * FROM [{table_identity}] WHERE 1=0")
-                result = conn.execute(stmt)
-                column_names = result.keys()
-            columns = [
-                Column(name, Integer, primary_key=True, autoincrement=True) if name.lower() == "id" else Column(name, String)
-                for name in column_names
-            ]
-            return Table(table_identity, meta, *columns)
-        
-        if isinstance(table_identity, str):
-            core_table = create_core_table()
-            uTable = UtilsTable(core_table, engine=self.engine, session=self.session, base=self.base, logLevel=self.logLevel)
-        else:
-            # ORM class of Table object
-            uTable = UtilsTable(table_identity, engine=self.engine, session=self.session, base=self.base, logLevel=self.logLevel)
+        table = UtilsTable(logLevel=self.logLevel)
+        table.load(table_identity, self.engine, session=self.session)
 
         self.logger.debug(f" => Table '{table_identity}' mapped from existing database")
-        return uTable
+        return table
     
     @require_authorization
     def get_table_names(self) -> list[str]:

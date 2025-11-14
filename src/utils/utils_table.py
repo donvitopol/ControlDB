@@ -143,7 +143,7 @@ class UtilsTable:
         # ✅ Ensure ID column exists if missing
         if not has_id:
             normalized_columns = {"ID": Integer} | normalized_columns
-
+        
         # ✅ Build column objects
         column_objs = []
         for name, col_type in normalized_columns.items():

@@ -35,9 +35,9 @@ import urllib
 import pandas as pd
 import win32com.client
 
-from sqlalchemy import Engine, MetaData, Table, Column, Integer, String
-from sqlalchemy import insert, delete, select, text, update
-from sqlalchemy import Engine, create_engine, MetaData
+from sqlalchemy import Table, Column, Integer, String
+from sqlalchemy import inspect, insert, delete, select, text, update
+from sqlalchemy import Engine, MetaData, create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy import (
@@ -635,6 +635,8 @@ class ControlDB():
         The function accepts different ID column name formats ('id', 'Id', 'ID'),
         but the final database column will always be created as 'ID'
         (auto-incrementing primary key).
+        
+        Returns None and logs a warning if table already exists.
 
         Args:
             table_name (str): Name of the table to create.
@@ -644,6 +646,13 @@ class ControlDB():
         Returns:
             Table: The created SQLAlchemy Table object.
         """
+        
+        # ✅ Check if table already exists
+        existing_tables = self.get_table_names()
+        if table_name in existing_tables:
+            self.logger.warning(f"⚠️ Table '{table_name}' already exists. Returning None.")
+            return None
+        
         table = UtilsTable(logLevel=self.logLevel)
         table.create(table_name, column_def, self.engine, session=self.session, metadata = metadata)
 

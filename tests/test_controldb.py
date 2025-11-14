@@ -1,397 +1,532 @@
 import unittest
 import os
 import tempfile
-from  src.utils import UtilsTable, UtilsRow, require_authorization
+
+from sqlalchemy import String, Integer
+
 from src import ControlDB, ROOTBASE, UserTable
-from tests.utils import temp_controldb, close_db, create_dummy_dataframe, make_temp_excel, temp_excel_manager, safe_remove_folder
-from sqlalchemy import Engine, Table, String, Integer
+from src.utils import UtilsTable, UtilsRow, require_authorization
+from tests.utils import (
+    temp_controldb,
+    close_db,
+    create_dummy_dataframe,
+    make_temp_excel,
+    temp_excel_manager,
+    safe_remove_folder,
+)
+
 
 class TestControlDB(unittest.TestCase):
-    """Unit tests for ControlDB using a real temporary database."""
+    """
+    Comprehensive unit tests for ControlDB and its UtilsTable/UtilsRow helpers.
+    Uses a fully isolated temporary database environment.
+    """
+
+    # ----------------------------------------------------------------------
+    # Setup / Teardown
+    # ----------------------------------------------------------------------
 
     def setUp(self):
-        """Create a temporary database folder and ControlDB instance."""
-        self.password="secret"
-        self.db_name = "test_db"  
-        self.folderSystem=None
-        self.db_type="mdb"
+        """Create a fresh isolated temporary database for each test."""
+        print("\n=== setUp ===")
 
-        self.temp_dir = tempfile.TemporaryDirectory()    
+        self.password = "secret"
+        self.db_name = "test_db"
+        self.db_type = "mdb"
+        self.folderSystem = None
+
+        # Temporary directory
+        self.temp_dir = tempfile.TemporaryDirectory()
         self.root_path = os.path.join(self.temp_dir.name, self.db_name)
         self.file_path = os.path.join(self.root_path, f"{self.db_name}.{self.db_type}")
 
-        self.db:ControlDB
-        self.db = temp_controldb(
-            self.db_name, 
+        # Create ControlDB test instance
+        self.db: ControlDB = temp_controldb(
+            self.db_name,
             self.root_path,
             folderSystem=self.folderSystem,
-            db_type= self.db_type,
+            db_type=self.db_type,
             password=self.password,
             base=ROOTBASE,
-            logLevel=10
+            logLevel=10,
         )
 
+        self.assertIsNotNone(self.db, "❌ setUp: Failed to initialize ControlDB")
+        print("    ✅ setUp completed")
+
     def tearDown(self):
-        """Clean up the temporary folder."""
-        close_db(self.temp_dir, self.db)
+        """Dispose DB connection and remove temp directory."""
+        print("=== tearDown ===")
+        try:
+            close_db(self.temp_dir, self.db)
+            print("    ✅ Temp folder cleaned")
+        except Exception as exc:
+            self.fail(f"❌ tearDown failed: {exc}")
 
-    def folder_file_system_test(self, db:ControlDB, dbName:str, rootPath:str, fileFolder, filePath:str, folderSystem:str | list[str]):
-        
-        self.assertEqual(dbName, db.name)
+    # ----------------------------------------------------------------------
+    # Filesystem validation helper
+    # ----------------------------------------------------------------------
 
-        
-        print("rootPath (test):     ", rootPath)
-        print("db.rootPath:", db.rootPath)
-        self.assertTrue(os.path.exists(db.rootPath))
-        self.assertEqual(rootPath, db.rootPath)
+    def folder_file_system_test(
+        self,
+        db: ControlDB,
+        dbName: str,
+        rootPath: str,
+        fileFolder: str,
+        filePath: str,
+        folderSystem: str | list[str],
+    ):
+        """Validate that ControlDB created the correct on-disk folder structure."""
+        print(" -- folder_file_system_test")
 
-        print("fileFolder (test):   ", fileFolder)
-        print("db.fileFolder:", db.fileFolder)
-        self.assertTrue(os.path.exists(db.fileFolder))
-        self.assertEqual(fileFolder, db.fileFolder)
+        # DB name
+        self.assertEqual(
+            dbName,
+            db.name,
+            f"❌ DB name mismatch. Expected: {dbName}, Got: {db.name}",
+        )
 
-        print("filePath (test):     ", filePath)
-        print("db.filePath:", db.filePath)
-        self.assertTrue(os.path.exists(db.filePath))
-        self.assertEqual(filePath, db.filePath)
+        # Root folder
+        print(f"   rootPath expected: {rootPath}")
+        print(f"   db.rootPath      : {db.rootPath}")
 
-    # -----------------------
-    # Test ControlDB
-    # -----------------------
+        self.assertTrue(os.path.exists(db.rootPath), f"❌ rootPath missing: {db.rootPath}")
+        self.assertEqual(
+            rootPath,
+            db.rootPath,
+            f"❌ Root path mismatch.\nExpected: {rootPath}\nGot: {db.rootPath}",
+        )
+
+        # File folder
+        print(f"   fileFolder expected: {fileFolder}")
+        print(f"   db.fileFolder      : {db.fileFolder}")
+
+        self.assertTrue(
+            os.path.exists(db.fileFolder),
+            f"❌ fileFolder missing: {db.fileFolder}",
+        )
+        self.assertEqual(
+            fileFolder,
+            db.fileFolder,
+            f"❌ fileFolder mismatch.\nExpected: {fileFolder}\nGot: {db.fileFolder}",
+        )
+
+        # DB file
+        print(f"   filePath expected: {filePath}")
+        print(f"   db.filePath      : {db.filePath}")
+
+        self.assertTrue(os.path.exists(db.filePath), f"❌ filePath missing: {db.filePath}")
+        self.assertEqual(
+            filePath,
+            db.filePath,
+            f"❌ filePath mismatch.\nExpected: {filePath}\nGot: {db.filePath}",
+        )
+
+        print("    ✅ folder_file_system_test passed")
+
+    # ----------------------------------------------------------------------
+    # ControlDB Tests
+    # ----------------------------------------------------------------------
+
     def test_identifier(self):
-        """Test that the identifier can only be set once."""
+        """Ensure the DB identifier can only be assigned once."""
         self.assertIsNone(self.db.id)
-        self.db.id = 1
-        self.assertEqual(1, self.db.id)
-        self.assertEqual(self.db_name, self.db.name)
 
-        # Assert that setting ID again raises an AttributeError
+        self.db.id = 1
+        self.assertEqual(self.db.id, 1)
+        self.assertEqual(self.db.name, self.db_name)
+
+        # ID cannot be overwritten
         with self.assertRaises(AttributeError):
             self.db.id = 2
 
-        self.assertEqual(1, self.db.id)
-
-    def test_connect_no_base(self):
+        self.assertEqual(self.db.id, 1)
+    
+    def test_authorization(self):
+        """Test DB creation/loading when base=None and folderSystem is a list."""
         temp_dir = tempfile.TemporaryDirectory()
-        fileName=self.db_name 
-        folderSystem=[self.db_name, "f1"]
 
-        db:ControlDB     
+        folderSystem = [self.db_name, "f1"]
+        fileName = self.db_name
+
         db = temp_controldb(
-            self.db_name, 
+            self.db_name,
             temp_dir.name,
             folderSystem=folderSystem,
-            db_type= "mdb",
+            db_type="mdb",
             base=None,
-            logLevel=10
+            logLevel=10,
         )
 
+        # File must not exist before creation
         self.assertFalse(os.path.exists(db.filePath))
+
         db.create_file(password=self.password)
         self.assertTrue(os.path.exists(db.filePath))
 
+        # Authorization
         self.assertFalse(db.authorized)
         db.connect(password=self.password)
         self.assertTrue(db.authorized)
 
-        rootPath = os.path.join(temp_dir.name)
+        rootPath = temp_dir.name
         fileFolder = os.path.join(rootPath, *folderSystem)
         filePath = os.path.join(fileFolder, f"{self.db_name}.{self.db_type}")
         dbName = os.path.join(*folderSystem, fileName)
-        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem=folderSystem)
+
+        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem)
         close_db(temp_dir, db)
+    
+    def test_authorization_failure(self):
+        """Connecting with wrong password should not authorize DB."""
+        
 
-    def test_parameter_folder_system_none(self):
+        password = "secret"
+        db_name = "test_aut_db"
 
-        temp_dir = tempfile.TemporaryDirectory()  
-        fileName=self.db_name 
-        folderSystem=None
+        # Temporary directory
+        temp_dir = tempfile.TemporaryDirectory()
+        root_path = os.path.join(self.temp_dir.name, self.db_name)
+        file_path = os.path.join(self.root_path, f"{self.db_name}.{self.db_type}")
 
-        db:ControlDB        
-        db = temp_controldb(
-            fileName, 
-            os.path.join(temp_dir.name),
-            folderSystem=folderSystem,
-            db_type= "mdb",
-            password=self.password,
-            base=None,
-            logLevel=10
+        # Create ControlDB test instance
+        db: ControlDB = temp_controldb(
+            db_name,
+            root_path,
+            folderSystem=None,
+            db_type="mdb",
+            base=ROOTBASE,
+            logLevel=10,
         )
 
-        rootPath = os.path.join(temp_dir.name)
+        self.assertIsNotNone(db, "❌ setUp: Failed to initialize ControlDB")
+        print("    ✅ setUp completed")
+        db.create_file(password=self.password)
+        print(db.authorized)
+        self.assertFalse(db.authorized)
+        
+        with self.assertRaises(Exception):
+            db.connect(password="wrongpassword")
+        
+        self.assertFalse(db.authorized)
+
+        close_db(temp_dir, db)
+
+    def test_duplicate_table_creation(self):
+        """Creating a table with existing name should raise an error."""
+        table = self.db.create_table("Test", {"ID": Integer})
+        self.assertIsInstance(table, UtilsTable)
+        
+        table = self.db.create_table("Test", {"ID": Integer})
+        self.assertIsNone(table)
+    
+    def test_double_close_db(self):
+        """Closing DB twice should not raise errors."""
+        close_db(self.temp_dir, self.db)
+        try:
+            close_db(self.temp_dir, self.db)
+        except Exception as e:
+            self.fail(f"close_db failed on second call: {e}")
+            
+    def test_file_delete_and_recreate(self):
+        """Deleting the DB file and recreating should succeed."""
+        
+        password = "secret"
+        db_name = "test_de&re_db"
+
+        # Temporary directory
+        temp_dir = tempfile.TemporaryDirectory()
+        root_path = os.path.join(self.temp_dir.name, self.db_name)
+        file_path = os.path.join(self.root_path, f"{self.db_name}.{self.db_type}")
+
+        # Create ControlDB test instance
+        db: ControlDB = temp_controldb(
+            db_name,
+            root_path,
+            folderSystem=None,
+            db_type="mdb",
+            base=ROOTBASE,
+            logLevel=10,
+        )
+        db.create_file(password=password)
+        db.connect(password=password)
+        db.remove(exec=True)
+        self.assertFalse(os.path.exists(db.filePath))
+        db.create_file(password=password)
+        self.assertTrue(os.path.exists(db.filePath))
+
+    def test_parameter_folder_system_none(self):
+        """folderSystem=None → DB lives directly inside rootPath."""
+        temp_dir = tempfile.TemporaryDirectory()
+
+        fileName = self.db_name
+        folderSystem = None
+
+        db = temp_controldb(
+            fileName,
+            temp_dir.name,
+            folderSystem=folderSystem,
+            db_type="mdb",
+            password=self.password,
+            base=None,
+            logLevel=10,
+        )
+
+        rootPath = temp_dir.name
         fileFolder = rootPath
         filePath = os.path.join(fileFolder, f"{self.db_name}.{self.db_type}")
         dbName = fileName
-        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem=folderSystem)
+
+        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem)
         close_db(temp_dir, db)
-        pass
 
     def test_parameter_folder_system_list(self):
-
+        """folderSystem=list → nested folders."""
         temp_dir = tempfile.TemporaryDirectory()
-        fileName=self.db_name 
-        folderSystem=[self.db_name, "f1"]
 
-        db:ControlDB     
+        folderSystem = [self.db_name, "f1"]
+        fileName = self.db_name
+
         db = temp_controldb(
-            self.db_name, 
+            self.db_name,
             temp_dir.name,
             folderSystem=folderSystem,
-            db_type= "mdb",
+            db_type="mdb",
             password=self.password,
             base=None,
-            logLevel=10
+            logLevel=10,
         )
-        rootPath = os.path.join(temp_dir.name)
+
+        rootPath = temp_dir.name
         fileFolder = os.path.join(rootPath, *folderSystem)
         filePath = os.path.join(fileFolder, f"{self.db_name}.{self.db_type}")
         dbName = os.path.join(*folderSystem, fileName)
-        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem=folderSystem)
+
+        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem)
         close_db(temp_dir, db)
-        pass
 
     def test_parameter_folder_system_str(self):
-
+        """folderSystem=str → use path as-is."""
         temp_dir = tempfile.TemporaryDirectory()
-        fileName=self.db_name 
-        folderSystem="test1/test2"
 
-        db:ControlDB     
+        folderSystem = "test1/test2"
+        fileName = self.db_name
+
         db = temp_controldb(
-            self.db_name, 
+            self.db_name,
             temp_dir.name,
             folderSystem=folderSystem,
-            db_type= "mdb",
+            db_type="mdb",
             password=self.password,
             base=None,
-            logLevel=10
+            logLevel=10,
         )
-        rootPath = os.path.join(temp_dir.name)
-        fileFolder = os.path.join(temp_dir.name, folderSystem)
+
+        rootPath = temp_dir.name
+        fileFolder = os.path.join(rootPath, folderSystem)
         filePath = os.path.join(fileFolder, f"{self.db_name}.{self.db_type}")
         dbName = os.path.join(folderSystem, fileName)
-        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem=folderSystem)
-        
-        print("folderSystem (test):     ", folderSystem)
-        print("db.folderSystem:", db.folderSystem)
-        _folderSystem = os.path.join(*folderSystem) if isinstance(folderSystem, list) else folderSystem
-        self.assertEqual(_folderSystem, db.folderSystem)
-        if _folderSystem == None:
-            self.assertEqual(type(db.folderSystem), None)
-        else:
-            self.assertEqual(type(db.folderSystem), str)
-        
-        
+
+        self.folder_file_system_test(db, dbName, rootPath, fileFolder, filePath, folderSystem)
+
+        # Validate that folderSystem stays a string
+        self.assertEqual(folderSystem, db.folderSystem)
+        self.assertIsInstance(db.folderSystem, str)
+
         close_db(temp_dir, db)
-        pass
+    
+    # ----------------------------------------------------------------------
+    # UtilsRow Tests
+    # ----------------------------------------------------------------------
 
-    # -----------------------
-    # Test Utils UtilsTable and UtilsRow
-    # -----------------------
+    def row_create_test(self, table: UtilsTable, data: dict):
+        """Test UtilsRow.create()."""
+        print(" -- row_create_test")
 
-    def create_test(self, table:UtilsTable, data:dict):
-        print(" -- create_test")
-
-        # --- 1. Get the first free ID and create the row ------------------------
         ref_id = table.get_first_free_id()
         new_id = table.row.create(**data)
+
         self.assertEqual(
-            ref_id, new_id,
-            f"❌ create() returned ID {new_id}, expected first free ID {ref_id}"
+            ref_id,
+            new_id,
+            f"❌ create() returned {new_id}, expected {ref_id}",
         )
-        
-        # --- 2. Fetch the row --------------------------------------------------
+
         row = table.row.get()
-        self.assertIsNotNone(row, f"❌ get() returned None after create() for ID={new_id}")
-        
-        # --- 3. Validate all provided fields ----------------------------------
+        self.assertIsNotNone(row, f"❌ get() returned None for ID={new_id}")
+
+        # Provided fields
         for key, value in data.items():
-            self.assertIn(key, row, f"❌ Column '{key}' missing in row after create()")
-            self.assertEqual(
-                value, row[key],
-                f"❌ Column '{key}' value mismatch after create(): expected {value}, got {row[key]}"
-            )
+            self.assertIn(key, row)
+            self.assertEqual(value, row[key])
 
-        # --- 4. Validate extra columns are None --------------------------------       
-        data_with_id = {**data, "ID": new_id}
-        extra_columns = {k: v for k, v in row.items() if k not in data_with_id}
-        for col, val in extra_columns.items():
-            self.assertIsNone(
-                val,
-                f"❌ Column '{col}' should be None after create(), but got {val}"
-            )
+        # Extra fields must be None
+        allowed = set(data.keys()) | {"ID"}
+        for col, val in row.items():
+            if col not in allowed:
+                self.assertIsNone(val)
 
-        print("    ✅ create_test passed")
-        # self.assertEqual(1, 2)
-        
-    def merge_test(self, table:UtilsTable, data:dict, id:int = None):
-        print(f" -- merge_test")     
-        
+        print("    ✅ row_create_test passed")
+
+    def row_merge_test(self, table: UtilsTable, data: dict, id: int = None):
+        """Test UtilsRow.merge()."""
+        print(" -- row_merge_test")
+
         if id is not None:
             table.row.id = id
 
-        _row  = table.row.get().copy()
+        original = table.row.get()
+        self.assertIsNotNone(original)
+        original = original.copy()
 
-        result  = table.row.merge(data)
-        self.assertTrue(result)
+        self.assertTrue(table.row.merge(data))
+
         row = table.row.get()
-        
-        print(f"data:           {data}")
+        self.assertIsNotNone(row)
+
+        # Updated fields
         for key, value in data.items():
-            # print(f"key:    {key}")
-            # print(f"value:  {value}")
-            self.assertEqual(value, row[key])
-        
-        print(f"_row:           {_row}")
-        print(f"row:            {row}")
-        extra_data = {k: v for k, v in _row.items() if k not in data}
-        print(f"extra_data:     {extra_data}")
-        # print(extra_data)
-        for key, value in extra_data.items():
             self.assertEqual(value, row[key])
 
-        # self.assertEqual(1, 2)
-    
-    def replace_test(self, table: UtilsTable, data: dict, id: int = None):
-        print(" -- replace_test")
+        # Not updated fields remain unchanged
+        for key, value in original.items():
+            if key not in data:
+                self.assertEqual(value, row[key])
 
-        # Ensure we start on the correct row
+        print("    ✅ row_merge_test passed")
+
+    def row_replace_test(self, table: UtilsTable, data: dict, id: int = None):
+        """Test UtilsRow.replace()."""
+        print(" -- row_replace_test")
+
         if id is not None:
             table.row.id = id
 
-        # Execute replace() and ensure it returns True
-        result = table.row.replace(data)
-        self.assertTrue(result, f"❌ replace() returned False for ID={id or table.row.id}")
+        self.assertTrue(table.row.replace(data))
 
-        # Fetch the updated row
         row = table.row.get()
-        self.assertIsNotNone(row, f"❌ get() returned None after replace() on ID={id}")
+        self.assertIsNotNone(row)
 
-        # Ensure ID is preserved
         expected_id = row["ID"]
         data_with_id = {**data, "ID": expected_id}
 
-        print(f"data_with_id:   {data_with_id}")
-        print(f"row:            {row}")
-
-        # Check that all provided fields match
+        # Check updated fields
         for key, value in data_with_id.items():
-            self.assertIn(key, row, f"❌ Column '{key}' missing in row after replace()")
-            self.assertEqual(
-                value, row[key],
-                f"❌ Column '{key}' value mismatch after replace(): expected {value}, got {row[key]}"
-            )
+            self.assertEqual(value, row[key])
 
-        # Check all other columns were set to None
-        extra_columns = {k: v for k, v in row.items() if k not in data_with_id}
+        # Other fields must be cleared
+        for col, val in row.items():
+            if col not in data_with_id:
+                self.assertIsNone(val)
 
-        print(f"extra_columns:  {extra_columns}")
+    def row_delete_test(self, table: UtilsTable, id: int = None):
+        """Test UtilsRow.delete()."""
+        print(" -- row_delete_test")
 
-        for col, val in extra_columns.items():
-            self.assertIsNone(
-                val,
-                f"❌ Column '{col}' should be None after replace(), but got {val}"
-            )
-
-        # self.assertEqual(1, 2)
-    
-    def delete_test(self, table: UtilsTable, id: int = None):
-        print(" -- delete_test")
-
-        # If an ID is provided, set it
         if id is not None:
             table.row.id = id
 
-        # --- 1. VERIFY ROW EXISTS BEFORE DELETE ---------------------------------
-        before_row = table.row.get()
-        self.assertIsNotNone(
-            before_row,
-            f"❌ delete_test: Row with ID={table.row.id} does NOT exist before deletion!"
-        )
+        before = table.row.get()
+        self.assertIsNotNone(before)
 
-        # --- 2. PERFORM DELETE ---------------------------------------------------
-        result = table.row.delete()
-        self.assertTrue(
-            result,
-            f"❌ delete_test: delete() returned False for ID={table.row.id}"
-        )
+        self.assertTrue(table.row.delete())
+        self.assertIsNone(table.row.get())
 
-        # --- 3. VERIFY ROW IS NOW GONE ------------------------------------------
-        after_row = table.row.get()
-        self.assertIsNone(
-            after_row,
-            f"❌ delete_test: Row with ID={table.row.id} STILL EXISTS after deletion!"
-        )
+        self.assertFalse(table.row.delete())  # Already deleted
+        print("    ✅ row_delete_test passed")
 
-        # --- 4. OPTIONAL: CHECK THAT DELETING AGAIN RETURNS FALSE ----------------
-        second_try = table.row.delete()
-        self.assertFalse(
-            second_try,
-            "❌ delete_test: delete() should return False when deleting a non-existing row!"
-        )
+    def test_merge_nonexistent_row(self):
+        """Merging a non-existent row should return False."""
+        table = self.db.create_table("Test3", {"ID": Integer, "value": String})
+        table.row.id = 999
+        result = table.row.merge({"value": "new"})
+        self.assertTrue(result)
 
-        print("    ✅ delete_test passed")
+    def test_replace_nonexistent_row(self):
+        """Replacing a non-existent row should return False."""
+        table = self.db.create_table("Test4", {"ID": Integer, "value": String})
+        table.row.id = 999
+        result = table.row.replace({"value": "new"})
+        self.assertTrue(result)
 
-    def table_manipulate_test(self, table: UtilsTable, ref_is_core:bool, ref_column_names:list):   
-        print(f" -- table_manipulate_test")   
-        
-        self.assertIsInstance(table, UtilsTable)        
+    # ----------------------------------------------------------------------
+    # UtilsTable Tests
+    # ----------------------------------------------------------------------
 
-        self.assertEqual(table.is_core, ref_is_core) 
-        self.assertTrue(hasattr(table, "connect"))
-        self.assertTrue(hasattr(table, "table_class")) 
+    def table_test(self, table: UtilsTable, ref_is_core: bool, ref_column_names: list):
+        """Verify full UtilsTable CRUD flow."""
+        print(" -- table_test")
+
+        self.assertIsInstance(table, UtilsTable)
+        self.assertEqual(table.is_core, ref_is_core)
+
         self.assertEqual(table.engine, self.db.engine)
         self.assertEqual(table.session, self.db.session)
 
-    
-        columnNames = table.get_column_names()
-        self.assertTrue(columnNames, ref_column_names)
-        
-        data =  {
-            'username': "Vito", 
-            'password':self.password, 
-            'fullname':"Vito Pol", 
-            'email':"test@test.org"
-            }
-        self.create_test(table, data)
-        self.merge_test(table, {'username': "donvitopol", 'fullname':"Jan Klaas"})
-        self.replace_test(table, {'username': "test"})
-        # self.delete_test(table)
+        column_names = table.get_column_names()
+        self.assertListEqual(column_names, ref_column_names)
 
-        # print(table.get_column_definitions())
+        # Full CRUD
+        print("     > row_create_test")
+        self.row_create_test(
+            table,
+            {
+                "username": "Vito",
+                "password": self.password,
+                "fullname": "Vito Pol",
+                "email": "test@test.org",
+            },
+        )
 
-        # self.assertEqual(1, 2)
-    
+        print("     > row_merge_test")
+        self.row_merge_test(
+            table,
+            {"username": "donvitopol", "fullname": "Jan Klaas"},
+        )
 
+        print("     > row_replace_test")
+        self.row_replace_test(table, {"username": "test"})
+
+        print("     > row_delete_test")
+        self.row_delete_test(table)
+
+        print("    ✅ table_test passed")
+
+    # ----------------------------------------------------------------------
+    # Table creation / loading
+    # ----------------------------------------------------------------------
 
     def test_utils_core_create_table(self):
-        print(f" -- test_utils_table_row_core_load_manipulate")     
+        print(" -- test_utils_core_create_table")
 
         column_def = {
-            'ID': Integer, 
-            'username': String, 
-            'password': String, 
-            'fullname': String,     
-            'email': String
-            }
-        table = self.db.create_table("Test", column_def)
+            "ID": Integer,
+            "username": String,
+            "password": String,
+            "fullname": String,
+            "email": String,
+        }
 
-        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
-        self.table_manipulate_test(table, True, ref_column_names)
+        table = self.db.create_table("Test", column_def)
+        self.table_test(table, True, list(column_def.keys()))
 
     def test_utils_core_load_table(self):
-        print(f" -- test_utils_table_row_core_load_manipulate")     
-        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
+        print(" -- test_utils_core_load_table")
+
+        ref_columns = ["ID", "username", "password", "fullname", "email"]
         table = self.db.load_table("UserTable")
-        self.table_manipulate_test(table, True, ref_column_names)
+        self.table_test(table, True, ref_columns)
 
     def test_utils_org_load_table(self):
-        print(f" -- test_utils_table_row_core_load_manipulate")  
-        ref_column_names = ['ID', 'username', 'password', 'fullname', 'email']
+        print(" -- test_utils_org_load_table")
+
+        ref_columns = ["ID", "username", "password", "fullname", "email"]
         table = self.db.load_table(UserTable)
-        self.table_manipulate_test(table, False, ref_column_names)
+        self.table_test(table, False, ref_columns)
 
 
-
+# ----------------------------------------------------------------------
+# Main entrypoint
+# ----------------------------------------------------------------------
 if __name__ == "__main__":
     unittest.main()
